@@ -12,3 +12,5 @@ Click on the "open TLM file" button, select your tlm log file and inspect your d
 This application should work with TLM files from any Spektrum DX, NX, IX transmitters. But I only tested with Spektrum NX8+
 As for sensors I only have Spektrum AR6xx receiver and a Spektrum Avian 70A smart ESC. So I could only test the telemetry parsing with these sensors.
 If you have troubles with decoding your TLM data send me your TLM files and I can try to fix this application and provide a new release/update.
+### - try it
+You can aslo try this application online on this website : [Spektrum TLM log viewer](https://wiposoftware.github.io/tlm-log-reader/)
