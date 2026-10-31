@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TLM Log Reader</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one working column. Header and drop zone on top, session cards, filter bar, then a chronological table with a pager. */
+:root{
+  --bg:#edf0f3; --panel:#f8f9fb; --ink:#13202b; --muted:#5b6b78; --line:#d3dae1;
+  --accent:#0a6a86; --accent2:#b8520a; --accent-ink:#ffffff; --warn:#a45a00; --row-alt:#f1f4f7; --divider:#dfe8ee;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow","Segoe UI",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e151b; --panel:#151e26; --ink:#e3eaf0; --muted:#8fa0ad; --line:#26333e;
+    --accent:#4cc3e0; --accent2:#f2a65a; --accent-ink:#06222b; --warn:#f0b050; --row-alt:#121b22; --divider:#1b2832; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e151b; --panel:#151e26; --ink:#e3eaf0; --muted:#8fa0ad; --line:#26333e;
+  --accent:#4cc3e0; --accent2:#f2a65a; --accent-ink:#06222b; --warn:#f0b050; --row-alt:#121b22; --divider:#1b2832; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.5;
+  padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:16px;min-width:0}
+h1{font-family:var(--f-display);font-weight:600;font-size:26px;letter-spacing:.01em;margin:0;text-wrap:balance}
+.sub{color:var(--muted);margin:2px 0 0;max-width:68ch}
+.top{display:flex;gap:12px 24px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap}
+.settings{display:flex;gap:12px;flex-wrap:wrap}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+select,input[type=number],input[type=search]{font:inherit;font-size:13px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 8px;min-width:0}
+input[type=number]{width:72px}
+select:focus-visible,input:focus-visible,button:focus-visible,.drop:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.drop{border:1.5px dashed var(--line);background:var(--panel);border-radius:6px;padding:18px 16px;display:flex;gap:12px 20px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.drop.over{border-color:var(--accent);background:var(--divider)}
+.drop p{margin:0;color:var(--muted)}
+.drop strong{color:var(--ink);font-weight:500}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;font-size:13px;font-weight:500;border-radius:4px;padding:7px 14px;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+.msg{color:var(--warn);font-size:13px;margin:0}
+.sessions{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+.sess{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px;min-width:0}
+.sess h3{font-family:var(--f-display);font-weight:600;font-size:16px;margin:0 0 6px;overflow-wrap:anywhere}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:13px;margin:0}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--f-mono);font-size:12.5px;overflow-wrap:anywhere}
+.bar{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center}
+.chips{display:flex;gap:6px;flex-wrap:wrap;flex:1 1 320px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;font-size:12px;border-radius:99px;background:var(--panel);border:1px solid var(--line);color:var(--ink)}
+.chip[aria-pressed="false"]{opacity:.45}
+.chip i{width:8px;height:8px;border-radius:50%;background:hsl(var(--h) 62% 48%);display:inline-block}
+.chip b{font-family:var(--f-mono);font-weight:400;color:var(--muted)}
+.chk{display:flex;gap:6px;align-items:center;font-size:13px}
+.tablebox{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:760px;font-variant-numeric:tabular-nums}
+th{position:sticky;top:0;text-align:left;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:500;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+td{padding:5px 12px;vertical-align:top;border-bottom:1px solid var(--line)}
+tbody tr:nth-child(even) td{background:var(--row-alt)}
+td.t{font-family:var(--f-mono);font-size:12.5px;white-space:nowrap;color:var(--muted)}
+td.s{white-space:nowrap;font-size:13px}
+td.s i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:hsl(var(--h) 62% 48%)}
+td.v{font-size:13px}
+td.v span{display:inline-block;margin-right:14px;white-space:nowrap}
+td.v em{font-style:normal;color:var(--muted);margin-right:4px}
+td.h{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);word-break:break-all;min-width:240px}
+tr.div td{background:var(--divider)!important;font-family:var(--f-display);font-weight:600;font-size:13px;letter-spacing:.02em}
+.pager{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;color:var(--muted);font-size:13px}
+.note{color:var(--muted);font-size:12.5px;max-width:90ch;margin:0}
+.demo{color:var(--warn)}
+[hidden]{display:none!important}
+.view{display:flex;flex-direction:column;gap:16px;min-width:0}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line)}
+.tab{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted);padding:8px 16px;margin-bottom:-1px}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.chartbox{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 8px 6px;min-width:0}
+.chartbox canvas{display:block;touch-action:pan-y;cursor:crosshair;max-width:100%}
+.gtitle{font-family:var(--f-display);font-weight:600;font-size:16px;margin:0 0 6px 6px;min-height:1.4em;display:flex;flex-wrap:wrap;gap:2px 20px;align-items:center}
+.gtitle .lg{display:inline-flex;align-items:center;gap:7px}
+.gtitle i{display:inline-block;width:14px;height:3px;border-radius:2px}
+.gtitle small{font-family:var(--f-body);font-weight:400;font-size:12px;color:var(--muted)}
+.gstats{white-space:pre-line;margin:0;font-family:var(--f-mono);font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>TLM Log Reader</h1>
+      <p class="sub">Open a Spektrum telemetry log (.TLM) and read it as a time-ordered table. Everything is decoded in your browser; the file is not uploaded.</p>
+    </div>
+    <div class="settings">
+      <label class="f" for="unit">Timestamp unit
+        <select id="unit">
+          <option value="1">1 ms</option>
+          <option value="10" selected>10 ms (1/100 s)</option>
+          <option value="0.1">0.1 ms</option>
+          <option value="1000">1 s</option>
+        </select>
+      </label>
+      <label class="f" for="poles">RPM poles<input id="poles" type="number" min="1" max="40" value="2"></label>
+      <label class="f" for="ratio">Gear ratio<input id="ratio" type="number" min="0.1" step="0.1" value="1"></label>
+    </div>
+  </div>
+
+  <div class="drop" id="drop" tabindex="0">
+    <p><strong id="fname">No file loaded.</strong> <span id="fmeta">Drop a .TLM file here or choose one.</span></p>
+    <div class="btns">
+      <button class="primary" id="pick" type="button">Open .TLM file</button>
+      <button id="demo" type="button">Load demo log</button>
+      <input id="file" type="file" accept=".tlm,.TLM,application/octet-stream" hidden>
+    </div>
+  </div>
+  <p class="msg" id="msg" hidden></p>
+
+  <div class="sessions" id="sessions"></div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" id="tabTable" type="button" role="tab" aria-selected="true">Table</button>
+    <button class="tab" id="tabGraph" type="button" role="tab" aria-selected="false">Graph</button>
+  </div>
+
+  <div class="view" id="tableView">
+  <div class="bar">
+    <div class="chips" id="chips"></div>
+    <label class="f" for="sessSel">Recording<select id="sessSel"></select></label>
+    <label class="f" for="q">Search<input id="q" type="search" placeholder="e.g. 4.89 or GPS"></label>
+    <label class="chk" for="raw"><input id="raw" type="checkbox"> Raw bytes</label>
+    <button id="copy" type="button">Copy CSV</button>
+  </div>
+
+  <div class="tablebox">
+    <table>
+      <thead><tr><th>Time</th><th>Sensor</th><th>Values</th><th class="rawcol" hidden>Raw (hex)</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="pager">
+    <span id="count"></span>
+    <span class="btns"><button id="prev" type="button">Previous</button><button id="next" type="button">Next</button></span>
+  </div>
+  <p class="note">Layout: 36-byte header blocks and 20-byte data blocks, timestamps in 10 ms ticks, shown relative to the start of each recording. Decoded from NX8+ logs: receiver, signal, ESC, smart battery, Vario-S, gyro, G-force, text display and the transmitter&#39;s own sticks and switches. Stick order (throttle, aileron, elevator, rudder) and the knob input are inferred; throttle was checked against ESC throttle. Switch bits, ID 05 and a few smart-battery pages have no known meaning yet and are shown as raw bytes. Cell voltages are always shown per cell. Without a smart plug on the battery they are all identical; with one they differ. Poles and gear ratio only affect RPM.</p>
+  </div>
+
+  <div class="view" id="graphView" hidden>
+    <div class="bar">
+      <label class="f" for="gSensor">Sensor<select id="gSensor"></select></label>
+      <label class="f" for="gValue">Value<select id="gValue"></select></label>
+      <label class="f" for="gSess">Recording<select id="gSess"></select></label>
+      <button id="gReset" type="button">Reset zoom</button>
+    </div>
+    <div class="bar">
+      <label class="f" for="gSensor2">Second sensor (right axis)<select id="gSensor2"></select></label>
+      <label class="f" for="gValue2">Second value<select id="gValue2" disabled></select></label>
+    </div>
+    <div class="chartbox" id="cvbox">
+      <h2 class="gtitle" id="gtitle"></h2>
+      <canvas id="cv" role="img" aria-label="Graph of the selected sensor value over time"></canvas>
+    </div>
+    <p class="gstats" id="gstats"></p>
+    <p class="note">Drag across the graph to zoom into a time range. The mouse wheel zooms around the pointer, Shift+drag moves the view and double-click shows everything again. Hover to read exact values. Pick a second sensor to draw it over the first one with its own scale on the right; leave it on None to show one graph.</p>
+  </div>
+</div>
+
+<script>
+/* ---------- Parser ---------- */
+var TYPES = {
+  0x00:{n:'Start-up data (ID 00)',h:200}, 0x01:{n:'ID 01',h:20}, 0x05:{n:'Unidentified (ID 05)',h:340}, 0x0A:{n:'PowerBox',h:30},
+  0x0C:{n:'Text display',h:170}, 0x11:{n:'Airspeed',h:190}, 0x12:{n:'Altimeter',h:260}, 0x14:{n:'G-Force',h:320},
+  0x15:{n:'JetCat ECU',h:10}, 0x16:{n:'GPS position',h:140}, 0x17:{n:'GPS speed',h:100}, 0x1A:{n:'Gyro',h:290},
+  0x20:{n:'ESC',h:25}, 0x40:{n:'Vario-S',h:230}, 0x42:{n:'Smart battery',h:75},
+  0x7A:{n:'TX sticks & switches',h:205}, 0x7C:{n:'TX clock',h:55}, 0x7E:{n:'Signal / RPM / Volts',h:350},
+  0x7F:{n:'Receiver',h:215}, 0xFF:{n:'Receiver',h:215}
+};
+var HEADER_NAMES = {0x01:'Volts',0x02:'Temp',0x03:'Amps',0x0A:'PowerBox',0x0C:'Text display',0x11:'Airspeed',0x12:'Altimeter',0x14:'G-Force',0x15:'JetCat',0x16:'GPS',0x1A:'Gyro',0x20:'ESC',0x40:'Vario-S',0x42:'Smart battery',0x7E:'Signal / RPM / Volts'};
+var MODEL_TYPE = {0:'Fixed wing',1:'Helicopter',2:'Glider'};
+var BIND_OLD = {1:'DSM2 6000',2:'DSM2 8000 RX',3:'DSMX 8000 RX',4:'DSMX 6000 RX'};
+function bindName(c){
+  if(BIND_OLD[c]) return BIND_OLD[c];
+  var fam = (c===0xB2||c===0xB3) ? 'DSMX' : (c===0xA2||c===0xA3) ? 'DSM2' : 'bind code';
+  return fam + ' (0x' + hx(c) + ')';
+}
+function tinfo(t){ return TYPES[t] || {n:'Unknown 0x'+hx(t),h:0}; }
+function hx(v){ return (v<16?'0':'')+v.toString(16).toUpperCase(); }
+
+function parseTLM(buf){
+  var u = new Uint8Array(buf), dv = new DataView(buf);
+  var sessions = [], recs = [], cur = null, prevHeader = false, off = 0, trailing = 0;
+  function newSession(){ cur = {id:sessions.length, model:'', modelNo:null, type:'', bind:'', sensors:[], closed:false, count:0, epoch:null}; sessions.push(cur); }
+  while(off + 4 <= u.length){
+    if(u[off]===255 && u[off+1]===255 && u[off+2]===255 && u[off+3]===255){
+      if(off + 36 > u.length){ trailing = u.length - off; break; }
+      var h = u.subarray(off, off+36);
+      if(!cur || !prevHeader || cur.closed){
+        newSession();
+        cur.modelNo = h[4] + 1;
+        cur.type = MODEL_TYPE[h[5]] || ('type '+h[5]);
+        cur.bind = bindName(h[6]);
+        var name = '';
+        for(var i=12;i<36 && h[i];i++) name += (h[i]>=32 && h[i]<127) ? String.fromCharCode(h[i]) : '';
+        cur.model = name.trim();
+      } else {
+        if(h[4]===0x17 || h[5]===0x17){ cur.closed = true; }
+        else if(h[4] !== 0xFF){ cur.sensors.push(h[4]); }
+      }
+      prevHeader = true; off += 36;
+    } else {
+      if(off + 20 > u.length){ trailing = u.length - off; break; }
+      if(!cur) newSession();
+      cur.closed = true; prevHeader = false;
+      var ty = u[off+4];
+      if(ty === 0x7C && cur.epoch === null) cur.epoch = dv.getUint32(off+12, true);
+      recs.push({sess:cur.id, t:dv.getUint32(off,true), type:ty, b:u.subarray(off, off+20), seq:recs.length});
+      cur.count++; off += 20;
+    }
+  }
+  recs.sort(function(a,b){ return a.sess-b.sess || a.t-b.t || a.seq-b.seq; });
+  sessions.forEach(function(s){
+    var r = recs.filter(function(x){ return x.sess===s.id; });
+    s.t0 = r.length ? r[0].t : 0; s.t1 = r.length ? r[r.length-1].t : 0;
+  });
+  return {sessions:sessions, recs:recs, trailing:trailing, size:u.length};
+}
+
+/* ---------- Decoding to readable values ---------- */
+function u16(b,i){ return (b[i]<<8)|b[i+1]; }
+function s16(b,i){ var v=u16(b,i); return v>32767 ? v-65536 : v; }
+function l16(b,i){ return b[i]|(b[i+1]<<8); }
+function sl16(b,i){ var v=l16(b,i); return v>32767 ? v-65536 : v; }
+function i8(v){ return v>127 ? v-256 : v; }
+function bcd(v){ return ((v>>4)*10)+(v&15); }
+function isBcd(v){ return (v>>4)<10 && (v&15)<10; }
+function f(v,d){ return v.toFixed(d); }
+function hexs(b,a,z){ return Array.prototype.slice.call(b,a,z).map(hx).join(' '); }
+function dm(b,i){
+  var ok = [0,1,2,3].every(function(k){ return isBcd(b[i+k]); });
+  var g = function(k){ return ok ? bcd(b[i+k]) : b[i+k]; };
+  return g(3) + g(2)/60 + (g(1) + g(0)/100)/3600;
+}
+function decode(r, o){
+  var b = r.b, v = [];
+  function add(l,x,unit,num){
+    if(num===undefined) num = (typeof x==='number' || /^-?\d+(\.\d+)?$/.test(x)) ? +x : null;
+    v.push([l, x + (unit ? ' '+unit : ''), num, unit||'']);
+  }
+  switch(r.type){
+    case 0x7A:
+      if(b[5]===0){ add('Switch bits', hexs(b,6,14)); }
+      else {
+        ['Knob','Throttle','Aileron','Elevator','Rudder'].forEach(function(nm,k){
+          var q = sl16(b,6+2*k); add(nm, q + ' (' + Math.round(q/20.47) + '%)', '', q);
+        });
+      }
+      break;
+    case 0x7C:
+      var ep = b[12] | (b[13]<<8) | (b[14]<<16) | (b[15]*16777216);
+      add('Clock', new Date(ep*1000).toISOString().slice(0,19).replace('T',' ')); break;
+    case 0x7E:
+      var us = u16(b,6);
+      if(us && us!==0xFFFF) add('RPM', Math.round(120000000/us/o.poles/o.ratio));
+      var vt = u16(b,8); if(vt!==0xFFFF) add('Pack volts', f(vt/100,2), 'V');
+      var tp = s16(b,10); if(tp!==32767) add('Temp', tp, '°C');
+      if(!(b[12]===0 && b[13]===0) && i8(b[12])!==-128){ add('Signal', i8(b[12]), 'dBm'); add('Link', b[13], '%'); }
+      if(!v.length) add('Data','no values');
+      break;
+    case 0x7F: case 0xFF:
+      add('Fades A',u16(b,6));
+      [['B',8],['L',10],['R',12]].forEach(function(p){ var q=u16(b,p[1]); if(q!==0xFFFF) add(p[0],q); });
+      add('Frame loss',u16(b,14)); add('Holds',u16(b,16)); add('Rx volts',f(u16(b,18)/100,2),'V'); break;
+    case 0x40:
+      add('Altitude', f(s16(b,6)/10,1), 'm');
+      ['250 ms','500 ms','1 s','1.5 s','2 s','3 s'].forEach(function(nm,k){ add('Δ'+nm, f(s16(b,8+2*k)/10,1), 'm/s'); });
+      break;
+    case 0x1A:
+      ['X','Y','Z'].forEach(function(a,k){ add('Rate '+a, f(s16(b,6+2*k)/10,1), '°/s'); });
+      ['X','Y','Z'].forEach(function(a,k){ add('Max '+a, f(s16(b,12+2*k)/10,1), '°/s'); });
+      break;
+    case 0x14:
+      add('X',f(s16(b,6)/100,2),'g'); add('Y',f(s16(b,8)/100,2),'g'); add('Z',f(s16(b,10)/100,2),'g');
+      add('X max',f(s16(b,12)/100,2),'g'); add('Y max',f(s16(b,14)/100,2),'g');
+      add('Z max',f(s16(b,16)/100,2),'g'); add('Z min',f(s16(b,18)/100,2),'g'); break;
+    case 0x20:
+      var er = u16(b,6);
+      if(er!==0xFFFF){
+        add('eRPM', er*10);
+        if(o.poles>2) add('RPM', Math.round(er*10*2/o.poles/o.ratio));
+      }
+      add('Input', f(u16(b,8)/100,2), 'V');
+      var ft = s16(b,10); if(ft!==32767 && ft!==-1) add('FET temp', f(ft/10,1), '°C');
+      add('Current', f(u16(b,12)/100,2), 'A');
+      if(u16(b,14)!==0xFFFF) add('BEC temp', f(s16(b,14)/10,1), '°C');
+      if(b[16]!==0xFF) add('BEC current', f(b[16]/10,1), 'A');
+      if(b[17]!==0xFF) add('BEC volts', f(b[17]*0.05,2), 'V');
+      add('Throttle', f(b[18]/2,1), '%'); add('Power out', f(b[19]/2,1), '%'); break;
+    case 0x42:
+      var sub = b[6];
+      if(sub===0x00){ add('Current', f(l16(b,8)/1000,2), 'A'); }
+      else if(sub===0x10 || sub===0x20 || sub===0x30){
+        var base = (sub>>4)*6-5, sum = 0, n = 0;
+        var cells = [];
+        for(var k=0;k<6;k++){ var c = l16(b,8+2*k); if(c!==0xFFFF){ cells.push(c); sum += c; n++; } }
+        cells.forEach(function(c,k){ add('Cell '+(base+k), f(c/1000,3), 'V'); });
+        if(n) add('Pack', f(sum/1000,2), 'V');
+      } else { add('Battery info 0x'+hx(sub), hexs(b,7,14)); }
+      break;
+    case 0x0C:
+      var txt = '';
+      for(var j=7;j<20;j++) txt += (b[j]>=32 && b[j]<127) ? String.fromCharCode(b[j]) : ' ';
+      add('Line '+b[6], txt.trim() || '(blank)'); break;
+    case 0x0A:
+      add('Volt 1',f(u16(b,6)/100,2),'V'); add('Volt 2',f(u16(b,8)/100,2),'V');
+      add('Capacity 1',u16(b,10),'mAh'); add('Capacity 2',u16(b,12),'mAh'); break;
+    case 0x11:
+      add('Speed',u16(b,6),'km/h'); add('Max',u16(b,8),'km/h'); break;
+    case 0x12:
+      add('Altitude',f(s16(b,6)/10,1),'m'); add('Max',f(s16(b,8)/10,1),'m'); break;
+    case 0x16:
+      add('Lat',f(dm(b,8),5),'°'); add('Lon',f(dm(b,12),5),'°'); break;
+    case 0x17:
+      add('Speed',u16(b,6)); break;
+    case 0x00:
+      add('Start-up data', hexs(b,6,20)); break;
+    case 0x05:
+      add('Data (not identified)', hexs(b,6,14)); break;
+    default:
+      add('Data', hexs(b,6,20));
+  }
+  return v;
+}
+function rawHex(b){ return Array.prototype.slice.call(b,4,20).map(hx).join(' '); }
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+/* ---------- State ---------- */
+var S = {data:null, view:[], page:0, per:200, hidden:{}, sess:'all', q:'', unit:10, view2:[]};
+var $ = function(id){ return document.getElementById(id); };
+
+function fmtTime(ticks){
+  var ms = Math.max(0, Math.round(ticks * S.unit));
+  var m = Math.floor(ms/60000), s = Math.floor((ms%60000)/1000), r = ms%1000;
+  return m + ':' + (s<10?'0':'') + s + '.' + ('00'+r).slice(-3);
+}
+function opts(){ return {poles: Math.max(1, +$('poles').value||1), ratio: Math.max(0.1, +$('ratio').value||1)}; }
+
+function annotate(){
+  var o = opts();
+  S.data.recs.forEach(function(r){
+    var vals = decode(r,o);
+    r.vals = vals;
+    r.text = (tinfo(r.type).n + ' ' + vals.map(function(x){return x[0]+' '+x[1];}).join(' ')).toLowerCase();
+  });
+}
+
+/* ---------- Rendering ---------- */
+function renderSessions(){
+  var d = S.data, el = $('sessions');
+  el.innerHTML = d.sessions.map(function(s, i){
+    var dur = fmtTime(s.t1 - s.t0);
+    var sens = s.sensors.length ? s.sensors.map(function(t){ return HEADER_NAMES[t] || ('0x'+hx(t)); }).join(', ') : 'none listed';
+    return '<div class="sess"><h3>Recording '+(i+1)+(s.model ? ' · '+esc(s.model) : '')+'</h3><dl class="kv">'
+      + (s.modelNo!==null ? '<dt>Model slot</dt><dd>'+s.modelNo+'</dd><dt>Type</dt><dd>'+esc(s.type)+'</dd><dt>Receiver</dt><dd>'+esc(s.bind)+'</dd>' : '<dt>Header</dt><dd>missing</dd>')
+      + (s.epoch ? '<dt>TX clock</dt><dd>'+new Date(s.epoch*1000).toISOString().slice(0,19).replace('T',' ')+'</dd>' : '') + '<dt>Records</dt><dd>'+s.count.toLocaleString()+'</dd><dt>Length</dt><dd>'+dur+'</dd>'
+      + '<dt>Sensors</dt><dd>'+esc(sens)+'</dd></dl></div>';
+  }).join('');
+  var sel = $('sessSel');
+  sel.innerHTML = '<option value="all">All recordings</option>' + d.sessions.map(function(s,i){ return '<option value="'+i+'">Recording '+(i+1)+'</option>'; }).join('');
+  sel.value = S.sess = 'all';
+}
+function renderChips(){
+  var counts = {};
+  S.data.recs.forEach(function(r){ counts[r.type] = (counts[r.type]||0)+1; });
+  var types = Object.keys(counts).map(Number).sort(function(a,b){return a-b;});
+  $('chips').innerHTML = types.map(function(t){
+    return '<button type="button" class="chip" data-t="'+t+'" aria-pressed="'+(!S.hidden[t])+'" style="--h:'+tinfo(t).h+'"><i></i>'+esc(tinfo(t).n)+' <b>'+counts[t].toLocaleString()+'</b></button>';
+  }).join('');
+}
+function applyFilter(){
+  var q = S.q.trim().toLowerCase();
+  S.view = S.data.recs.filter(function(r){
+    if(S.hidden[r.type]) return false;
+    if(S.sess!=='all' && r.sess !== +S.sess) return false;
+    if(q && r.text.indexOf(q) < 0) return false;
+    return true;
+  });
+  S.page = 0; renderRows();
+}
+function renderRows(){
+  var showRaw = $('raw').checked, start = S.page*S.per, slice = S.view.slice(start, start+S.per), html = '', lastSess = -1;
+  if(start > 0 && slice.length) lastSess = S.view[start-1].sess;
+  slice.forEach(function(r){
+    if(r.sess !== lastSess){
+      var s = S.data.sessions[r.sess];
+      html += '<tr class="div"><td colspan="'+(showRaw?4:3)+'">Recording '+(r.sess+1)+(s.model ? ' · '+esc(s.model) : '')+'</td></tr>';
+      lastSess = r.sess;
+    }
+    var s0 = S.data.sessions[r.sess].t0, ti = tinfo(r.type);
+    html += '<tr><td class="t">'+fmtTime(r.t - s0)+'</td><td class="s" style="--h:'+ti.h+'"><i></i>'+esc(ti.n)+'</td><td class="v">'
+      + r.vals.map(function(x){ return '<span><em>'+esc(x[0])+'</em>'+esc(x[1])+'</span>'; }).join('')
+      + '</td>' + (showRaw ? '<td class="h">'+rawHex(r.b)+'</td>' : '') + '</tr>';
+  });
+  $('rows').innerHTML = html || '<tr><td colspan="3" style="padding:18px 12px;color:var(--muted)">No records match the current filters.</td></tr>';
+  document.querySelector('.rawcol').hidden = !showRaw;
+  var pages = Math.max(1, Math.ceil(S.view.length / S.per));
+  $('count').textContent = S.view.length.toLocaleString() + ' records · page ' + (S.page+1) + ' of ' + pages;
+  $('prev').disabled = S.page <= 0; $('next').disabled = S.page >= pages-1;
+}
+
+/* ---------- Loading ---------- */
+function showMsg(t){ var m=$('msg'); m.textContent = t||''; m.hidden = !t; }
+function load(buf, name, isDemo){
+  showMsg('');
+  var d = parseTLM(buf);
+  if(!d.recs.length){ showMsg('No telemetry records found in this file. It may be empty or use a layout this reader does not know.'); }
+  S.data = d; S.hidden = {}; S.q = ''; $('q').value = '';
+  $('fname').textContent = name; $('fname').className = isDemo ? 'demo' : '';
+  $('fmeta').textContent = (d.size/1024).toFixed(1)+' KB · '+d.sessions.length+' recording'+(d.sessions.length===1?'':'s')+' · '+d.recs.length.toLocaleString()+' records' + (isDemo ? ' · generated example, not a real flight' : '') + (d.trailing ? ' · '+d.trailing+' trailing bytes ignored' : '');
+  annotate(); renderSessions(); renderChips(); applyFilter(); buildSeries();
+}
+function readFile(file){
+  if(!file) return;
+  var fr = new FileReader();
+  fr.onload = function(){ load(fr.result, file.name, false); };
+  fr.onerror = function(){ showMsg('The file could not be read.'); };
+  fr.readAsArrayBuffer(file);
+}
+function demoBuffer(){
+  var parts = [];
+  function hdr(fill){ var a = new Uint8Array(36); a.fill(0); a[0]=a[1]=a[2]=a[3]=255; fill(a); return a; }
+  parts.push(hdr(function(a){ a[4]=2; a[5]=0; a[6]=3; 'DEMO EDGE 540'.slice(0,10).split('').forEach(function(c,i){ a[12+i]=c.charCodeAt(0); }); }));
+  [0x7F,0x7E,0x12,0x11,0x14].forEach(function(t){ parts.push(hdr(function(a){ a[4]=t; })); });
+  parts.push(hdr(function(a){ a[4]=0x17; a[5]=0x17; }));
+  function rec(t,type,w){ var a = new Uint8Array(20); new DataView(a.buffer).setUint32(0,t,true); a[4]=type; w(a); return a; }
+  function p16(a,i,v){ a[i]=(v>>8)&255; a[i+1]=v&255; }
+  for(var k=0;k<600;k++){
+    var t = k*10, ph = k/600, alt = Math.round(Math.sin(ph*Math.PI)*1800 + 20), rpm = 9000 + Math.round(Math.sin(k/20)*1500);
+    parts.push(rec(t,0x7F,function(a){ p16(a,6,k%40?1:2); p16(a,8,k%55?0:1); p16(a,10,0); p16(a,12,1); p16(a,14,k>>6); p16(a,16,0); p16(a,18,Math.round(488 - ph*12)); }));
+    if(k%2===0) parts.push(rec(t+2,0x7E,function(a){ p16(a,6,Math.round(120000000/rpm/2)); p16(a,8,Math.round(1190 - ph*60)); p16(a,10,34 + Math.round(ph*20)); }));
+    if(k%3===0) parts.push(rec(t+4,0x12,function(a){ p16(a,6,alt & 0xFFFF); p16(a,8,1850); }));
+    if(k%3===1) parts.push(rec(t+5,0x11,function(a){ p16(a,6,Math.round(70 + Math.sin(k/15)*25)); p16(a,8,105); }));
+    if(k%5===2) parts.push(rec(t+7,0x14,function(a){ p16(a,6,(Math.round(Math.sin(k/9)*40)) & 0xFFFF); p16(a,8,Math.round(Math.cos(k/11)*30) & 0xFFFF); p16(a,10,100 + Math.round(Math.sin(k/7)*120)); p16(a,12,90); p16(a,14,70); p16(a,16,310); p16(a,18,0xFFEC); }));
+  }
+  var n = parts.reduce(function(s,p){ return s+p.length; },0), out = new Uint8Array(n), o = 0;
+  parts.forEach(function(p){ out.set(p,o); o += p.length; });
+  return out.buffer;
+}
+
+/* ---------- Events ---------- */
+$('pick').onclick = function(){ $('file').click(); };
+$('file').onchange = function(e){ readFile(e.target.files[0]); e.target.value = ''; };
+$('demo').onclick = function(){ load(demoBuffer(), 'demo.tlm (example data)', true); };
+var drop = $('drop');
+['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add('over'); }); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove('over'); }); });
+drop.addEventListener('drop',function(e){ if(e.dataTransfer.files.length) readFile(e.dataTransfer.files[0]); });
+drop.addEventListener('keydown',function(e){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); $('file').click(); } });
+$('chips').addEventListener('click',function(e){
+  var b = e.target.closest('.chip'); if(!b) return;
+  var t = b.getAttribute('data-t'); S.hidden[t] = !S.hidden[t];
+  b.setAttribute('aria-pressed', String(!S.hidden[t])); applyFilter();
+});
+$('sessSel').onchange = function(e){ S.sess = e.target.value; applyFilter(); };
+$('q').oninput = function(e){ S.q = e.target.value; if(S.data) applyFilter(); };
+$('raw').onchange = function(){ if(S.data) renderRows(); };
+$('prev').onclick = function(){ S.page--; renderRows(); };
+$('next').onclick = function(){ S.page++; renderRows(); };
+$('unit').onchange = function(e){ S.unit = +e.target.value; if(S.data){ renderSessions(); renderRows(); pickSeries(); } };
+['poles','ratio'].forEach(function(id){ $(id).onchange = function(){ if(S.data){ annotate(); applyFilter(); buildSeries(); } }; });
+$('copy').onclick = function(){
+  if(!S.data) return;
+  var lines = ['time_s,recording,sensor,values,raw_hex'];
+  S.view.forEach(function(r){
+    var s0 = S.data.sessions[r.sess].t0;
+    lines.push([((r.t-s0)*S.unit/1000).toFixed(3), r.sess+1, tinfo(r.type).n, r.vals.map(function(x){return x[0]+'='+x[1];}).join('; '), rawHex(r.b)].map(function(c){ return '"'+String(c).replace(/"/g,'""')+'"'; }).join(','));
+  });
+  var text = lines.join('\n'), btn = $('copy');
+  function done(t){ btn.textContent = t; setTimeout(function(){ btn.textContent = 'Copy CSV'; }, 1600); }
+  try { navigator.clipboard.writeText(text).then(function(){ done('Copied'); }, function(){ done('Copy blocked'); }); }
+  catch(e){ done('Copy blocked'); }
+};
+
+/* ---------- Graph (plain canvas, no libraries) ---------- */
+var G = {series:{}, cur:null, cur2:null, sess:0, x0:0, x1:1, xmin:0, xmax:1, drag:null, hover:null};
+var GROUP_ORDER = [0x20,0x42,0x40,0x14,0x1A,0x7E,0x7F,0xFF,0x7A,0x0A,0x11,0x12,0x15,0x16,0x17];
+var PLOT = {l:60, r:14, t:12, b:32};
+var RIGHT_W = 64;
+
+function groupKey(r){ return r.type + (r.type===0x7A ? '/'+r.b[5] : r.type===0x42 ? '/'+r.b[6] : ''); }
+function groupName(gk){
+  var p = gk.split('/'), t = +p[0];
+  if(t===0x7A) return 'TX sticks';
+  if(t===0x42){ var s = +p[1]; return 'Smart battery · ' + (s===0 ? 'current' : (s>>4)===1 ? 'cells 1-6' : 'cells ' + ((s>>4)*6-5) + '+'); }
+  return tinfo(t).n;
+}
+function buildSeries(){
+  var ser = {};
+  S.data.recs.forEach(function(r){
+    var gk = groupKey(r), g = ser[gk] || (ser[gk] = {});
+    r.vals.forEach(function(x){
+      if(x[2] === null) return;
+      var s = g[x[0]] || (g[x[0]] = {t:[], v:[], s:[], unit:x[3]});
+      s.t.push(r.t); s.v.push(x[2]); s.s.push(r.sess);
+    });
+  });
+  /* ESC: offer RPM calculated from eRPM, using the poles and gear ratio fields */
+  var o = opts();
+  Object.keys(ser).forEach(function(k){
+    if(+k.split('/')[0] !== 0x20 || !ser[k].eRPM) return;
+    var e = ser[k].eRPM, k2 = 2/o.poles/o.ratio;
+    var rpm = {t:e.t, s:e.s, unit:'rpm', v:e.v.map(function(x){ return Math.round(x*k2); })}, g2 = {};
+    Object.keys(ser[k]).forEach(function(l){ if(l !== 'RPM'){ g2[l] = ser[k][l]; if(l === 'eRPM') g2.RPM = rpm; } });
+    ser[k] = g2;
+  });
+  G.series = ser;
+  var prev = $('gSensor').value, prev2 = $('gSensor2').value;
+  var keys = Object.keys(ser).filter(function(k){ return Object.keys(ser[k]).length; });
+  function ord(k){ var i = GROUP_ORDER.indexOf(+k.split('/')[0]); return i<0 ? 99 : i; }
+  keys.sort(function(a,b){ return ord(a)-ord(b) || (a<b?-1:a>b?1:0); });
+  var opt = keys.map(function(k){ return '<option value="'+k+'">'+esc(groupName(k))+'</option>'; }).join('');
+  $('gSensor').innerHTML = opt;
+  $('gSensor2').innerHTML = '<option value="">None</option>' + opt;
+  if(keys.indexOf(prev) >= 0) $('gSensor').value = prev;
+  $('gSensor2').value = keys.indexOf(prev2) >= 0 ? prev2 : '';
+  var gs = $('gSess');
+  gs.innerHTML = S.data.sessions.map(function(s,i){ return '<option value="'+i+'">Recording '+(i+1)+'</option>'; }).join('');
+  G.sess = 0; gs.value = '0';
+  fillValues();
+}
+function fillList(sensId, valId){
+  var gk = $(sensId).value, sel = $(valId), prev = sel.value, labels = (gk && G.series[gk]) ? Object.keys(G.series[gk]) : [];
+  sel.innerHTML = labels.map(function(l){ return '<option value="'+esc(l)+'">'+esc(l)+'</option>'; }).join('');
+  sel.disabled = !labels.length;
+  if(labels.indexOf(prev) >= 0) sel.value = prev;
+}
+function fillValues(){ fillList('gSensor','gValue'); fillList('gSensor2','gValue2'); pickSeries(); }
+function extract(gk, lb){
+  if(!gk || !G.series[gk] || !G.series[gk][lb]) return null;
+  var s = G.series[gk][lb], t0 = S.data.sessions[G.sess].t0, xs = [], ys = [];
+  for(var i=0;i<s.t.length;i++){ if(s.s[i] === G.sess){ xs.push((s.t[i]-t0)*S.unit/1000); ys.push(s.v[i]); } }
+  return {x:Float64Array.from(xs), y:Float64Array.from(ys), unit:s.unit, title:groupName(gk)+' · '+lb+(s.unit ? ' ('+s.unit+')' : '')};
+}
+function pickSeries(){
+  G.cur = extract($('gSensor').value, $('gValue').value);
+  G.cur2 = extract($('gSensor2').value, $('gValue2').value);
+  G.hover = null; G.drag = null;
+  var lo = Infinity, hi = -Infinity;
+  [G.cur, G.cur2].forEach(function(s){ if(s && s.x.length){ lo = Math.min(lo, s.x[0]); hi = Math.max(hi, s.x[s.x.length-1]); } });
+  if(lo <= hi){ G.xmin = lo; G.xmax = hi > lo ? hi : lo + 1; }
+  G.x0 = G.xmin; G.x1 = G.xmax;
+  drawIfVisible();
+}
+function drawIfVisible(){ if(!$('graphView').hidden) draw(); }
+
+function lowerBound(a, v){ var lo=0, hi=a.length; while(lo<hi){ var m=(lo+hi)>>1; if(a[m] < v) lo=m+1; else hi=m; } return lo; }
+function nearestIdx(xs, xv){ var n = xs.length, i = lowerBound(xs, xv); if(i > 0 && (i >= n || Math.abs(xs[i-1]-xv) <= Math.abs(xs[i]-xv))) i--; return i; }
+function niceStep(range, target){
+  var raw = range/target, p = Math.pow(10, Math.floor(Math.log10(raw))), n = raw/p;
+  return (n<=1 ? 1 : n<=2 ? 2 : n<=5 ? 5 : 10) * p;
+}
+var TSTEPS = [0.001,0.002,0.005,0.01,0.02,0.05,0.1,0.2,0.5,1,2,5,10,15,30,60,120,300,600,1200,1800,3600,7200];
+function timeStep(range){ var want = range/7; for(var i=0;i<TSTEPS.length;i++){ if(TSTEPS[i] >= want) return TSTEPS[i]; } return TSTEPS[TSTEPS.length-1]; }
+function fmtAxisTime(sec, step, range){
+  if(range >= 90){ var m = Math.floor(sec/60), s = Math.round(sec - m*60); if(s===60){ m++; s=0; } return m+':'+(s<10?'0':'')+s; }
+  var d = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+  return sec.toFixed(d) + ' s';
+}
+function cssv(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || '#888'; }
+function fmtVal(v, yd, unit){ return (Math.abs(v) >= 1000 || Number.isInteger(v) ? String(v) : v.toFixed(Math.max(yd,1))) + (unit ? ' '+unit : ''); }
+
+/* value range, nice axis steps and statistics of one series for the visible time window */
+function scaleFor(s, x0, x1){
+  var xs = s.x, ys = s.y, n = xs.length;
+  var i0 = Math.max(0, lowerBound(xs, x0) - 1), i1 = Math.min(n-1, lowerBound(xs, x1));
+  var mn = Infinity, mx = -Infinity, sum = 0, cnt = 0;
+  for(var i=i0;i<=i1;i++){ var v = ys[i]; if(v<mn) mn=v; if(v>mx) mx=v; if(xs[i]>=x0 && xs[i]<=x1){ sum += v; cnt++; } }
+  var lo = mn, hi = mx;
+  if(hi - lo < 1e-9){ var pad = Math.abs(hi)*0.05 || 1; lo -= pad; hi += pad; } else { var pd = (hi-lo)*0.06; lo -= pd; hi += pd; }
+  var step = niceStep(hi-lo, 5);
+  return {i0:i0, i1:i1, mn:mn, mx:mx, sum:sum, cnt:cnt, step:step, ya:Math.floor(lo/step)*step, yb:Math.ceil(hi/step)*step,
+          yd:Math.max(0, Math.min(4, -Math.floor(Math.log10(step)+1e-9)))};
+}
+function strokeSeries(c, s, sc, PX, PY, color, pw){
+  var xs = s.x, ys = s.y, i0 = sc.i0, i1 = sc.i1;
+  c.strokeStyle = color; c.lineWidth = 1.5; c.lineJoin = 'round'; c.beginPath();
+  if(i1 - i0 > pw*2){
+    var col = -1, first = 0, last = 0, cmin = 0, cmax = 0, started = false;
+    var flush = function(){
+      var X = col + 0.5;
+      if(!started){ c.moveTo(X, PY(first)); started = true; } else c.lineTo(X, PY(first));
+      if(cmin < cmax){ c.lineTo(X, PY(cmin)); c.lineTo(X, PY(cmax)); }
+      c.lineTo(X, PY(last));
+    };
+    for(var k=i0;k<=i1;k++){
+      var cx = Math.floor(PX(xs[k])), yv = ys[k];
+      if(cx !== col){ if(col !== -1) flush(); col = cx; first = last = cmin = cmax = yv; }
+      else { last = yv; if(yv<cmin) cmin=yv; if(yv>cmax) cmax=yv; }
+    }
+    if(col !== -1) flush();
+  } else {
+    for(var j=i0;j<=i1;j++){ if(j===i0) c.moveTo(PX(xs[j]), PY(ys[j])); else c.lineTo(PX(xs[j]), PY(ys[j])); }
+  }
+  c.stroke();
+  if(i1 - i0 < pw/8){ c.fillStyle = color; for(var q=i0;q<=i1;q++){ c.beginPath(); c.arc(PX(xs[q]), PY(ys[q]), 2.2, 0, 6.2832); c.fill(); } }
+}
+function statLine(s, sc, tag){
+  var dd = Math.max(sc.yd,1), u = s.unit ? ' '+s.unit : '', avg = sc.cnt ? sc.sum/sc.cnt : 0;
+  return tag + 'In view: ' + sc.cnt.toLocaleString() + ' values · min ' + sc.mn.toFixed(dd) + u + ' · max ' + sc.mx.toFixed(dd) + u + ' · average ' + avg.toFixed(dd) + u;
+}
+
+function draw(){
+  var cv = $('cv'), box = $('cvbox'), has2 = !!(G.cur2 && G.cur2.x.length);
+  PLOT.r = has2 ? RIGHT_W : 14;
+  var w = Math.max(280, box.clientWidth - 16), h = Math.max(300, Math.min(520, Math.round(w*0.46)));
+  var dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); cv.style.width = w+'px'; cv.style.height = h+'px';
+  var c = cv.getContext('2d'); c.setTransform(dpr,0,0,dpr,0,0);
+  var ink = cssv('--ink'), muted = cssv('--muted'), line = cssv('--line'), accent = cssv('--accent'), accent2 = cssv('--accent2'), panel = cssv('--panel');
+  c.fillStyle = panel; c.fillRect(0,0,w,h);
+  var tl = $('gtitle');
+  if(!G.cur) tl.textContent = '';
+  else if(!has2) tl.textContent = G.cur.title;
+  else tl.innerHTML = '<span class="lg"><i style="background:var(--accent)"></i>' + esc(G.cur.title) + '<small>left axis</small></span>'
+    + '<span class="lg"><i style="background:var(--accent2)"></i>' + esc(G.cur2.title) + '<small>right axis</small></span>';
+  c.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  if(!G.cur || !G.cur.x.length){
+    c.fillStyle = muted; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText('No values for this sensor in the selected recording.', w/2, h/2);
+    $('gstats').textContent = ''; return;
+  }
+  var xs = G.cur.x, pw = w - PLOT.l - PLOT.r, ph = h - PLOT.t - PLOT.b, x0 = G.x0, x1 = G.x1;
+  var s1 = scaleFor(G.cur, x0, x1), s2 = has2 ? scaleFor(G.cur2, x0, x1) : null;
+  function PX(x){ return PLOT.l + (x-x0)/(x1-x0)*pw; }
+  function PY1(y){ return PLOT.t + (1-(y-s1.ya)/(s1.yb-s1.ya))*ph; }
+  function PY2(y){ return PLOT.t + (1-(y-s2.ya)/(s2.yb-s2.ya))*ph; }
+  // grid and left axis
+  c.lineWidth = 1; c.textBaseline = 'middle';
+  for(var y=s1.ya; y<=s1.yb+s1.step*0.001; y+=s1.step){
+    var py = Math.round(PY1(y)) + 0.5;
+    c.strokeStyle = line; c.beginPath(); c.moveTo(PLOT.l, py); c.lineTo(PLOT.l+pw, py); c.stroke();
+    c.fillStyle = has2 ? accent : muted; c.textAlign = 'right'; c.fillText(y.toFixed(s1.yd), PLOT.l-8, py);
+  }
+  // right axis (second sensor)
+  if(has2){
+    c.strokeStyle = accent2; c.fillStyle = accent2; c.textAlign = 'left';
+    for(var y2=s2.ya; y2<=s2.yb+s2.step*0.001; y2+=s2.step){
+      var p2 = Math.round(PY2(y2)) + 0.5;
+      c.beginPath(); c.moveTo(PLOT.l+pw, p2); c.lineTo(PLOT.l+pw+4, p2); c.stroke();
+      c.fillText(y2.toFixed(s2.yd), PLOT.l+pw+8, p2);
+    }
+  }
+  // time axis
+  var tstep = timeStep(x1-x0); c.textAlign = 'center'; c.textBaseline = 'top';
+  for(var t=Math.ceil(x0/tstep)*tstep; t<=x1+tstep*0.001; t+=tstep){
+    var px = Math.round(PX(t)) + 0.5;
+    c.strokeStyle = line; c.beginPath(); c.moveTo(px, PLOT.t); c.lineTo(px, PLOT.t+ph); c.stroke();
+    c.fillStyle = muted; c.fillText(fmtAxisTime(t, tstep, x1-x0), px, PLOT.t+ph+8);
+  }
+  c.strokeStyle = has2 ? accent : muted; c.beginPath(); c.moveTo(PLOT.l+0.5, PLOT.t); c.lineTo(PLOT.l+0.5, PLOT.t+ph+0.5); c.stroke();
+  c.strokeStyle = muted; c.beginPath(); c.moveTo(PLOT.l, PLOT.t+ph+0.5); c.lineTo(PLOT.l+pw, PLOT.t+ph+0.5); c.stroke();
+  if(has2){ c.strokeStyle = accent2; c.beginPath(); c.moveTo(PLOT.l+pw+0.5, PLOT.t); c.lineTo(PLOT.l+pw+0.5, PLOT.t+ph+0.5); c.stroke(); }
+  // data
+  c.save(); c.beginPath(); c.rect(PLOT.l, PLOT.t, pw, ph); c.clip();
+  strokeSeries(c, G.cur, s1, PX, PY1, accent, pw);
+  if(has2) strokeSeries(c, G.cur2, s2, PX, PY2, accent2, pw);
+  if(G.drag && G.drag.mode === 'zoom'){
+    var a = Math.min(G.drag.a, G.drag.b), b = Math.max(G.drag.a, G.drag.b);
+    c.globalAlpha = 0.16; c.fillStyle = accent; c.fillRect(a, PLOT.t, b-a, ph); c.globalAlpha = 1;
+  }
+  c.restore();
+  // hover
+  if(G.hover !== null && !G.drag){
+    var xv = x0 + (G.hover-PLOT.l)/pw*(x1-x0), idx = nearestIdx(xs, xv);
+    if(xs[idx] >= x0 && xs[idx] <= x1){
+      var tH = xs[idx], hpx = PX(tH);
+      c.strokeStyle = muted; c.lineWidth = 1; c.setLineDash([3,3]);
+      c.beginPath(); c.moveTo(Math.round(hpx)+0.5, PLOT.t); c.lineTo(Math.round(hpx)+0.5, PLOT.t+ph); c.stroke(); c.setLineDash([]);
+      function dot(x, y, col){
+        c.fillStyle = col; c.beginPath(); c.arc(x, y, 4, 0, 6.2832); c.fill();
+        c.strokeStyle = panel; c.lineWidth = 2; c.stroke();
+      }
+      dot(hpx, PY1(G.cur.y[idx]), accent);
+      var rows = [{t:fmtTime(tH*1000/S.unit)}, {t:fmtVal(G.cur.y[idx], s1.yd, G.cur.unit), col:accent}];
+      if(has2){
+        var j = nearestIdx(G.cur2.x, tH);
+        rows.push({t:fmtVal(G.cur2.y[j], s2.yd, G.cur2.unit), col:accent2});
+        if(G.cur2.x[j] >= x0 && G.cur2.x[j] <= x1) dot(PX(G.cur2.x[j]), PY2(G.cur2.y[j]), accent2);
+      }
+      var tw = 0;
+      rows.forEach(function(r){ tw = Math.max(tw, c.measureText(r.t).width + (r.col && has2 ? 12 : 0)); });
+      tw += 16;
+      var th = 6 + 16*rows.length, tx = hpx + 12, ty = PLOT.t + 6;
+      if(tx + tw > PLOT.l + pw) tx = hpx - 12 - tw;
+      if(tx < PLOT.l + 4) tx = PLOT.l + 4;
+      c.fillStyle = ink; c.globalAlpha = 0.92; c.fillRect(tx, ty, tw, th); c.globalAlpha = 1;
+      c.textAlign = 'left'; c.textBaseline = 'top';
+      rows.forEach(function(r, i){
+        var ry = ty + 5 + 16*i, rx = tx + 8;
+        if(r.col && has2){ c.fillStyle = r.col; c.fillRect(rx, ry+2, 8, 8); rx += 12; }
+        c.fillStyle = cssv('--bg'); c.fillText(r.t, rx, ry);
+      });
+    }
+  }
+  var st = [statLine(G.cur, s1, has2 ? 'Left: ' : '')];
+  if(has2) st.push(statLine(G.cur2, s2, 'Right: '));
+  $('gstats').textContent = st.join('\n');
+}
+
+/* graph interaction */
+(function(){
+  var cv = $('cv');
+  function px(e){ return e.clientX - cv.getBoundingClientRect().left; }
+  function inPlot(x){ return x >= PLOT.l && x <= cv.clientWidth - PLOT.r; }
+  function toX(x){ return G.x0 + (x-PLOT.l)/(cv.clientWidth-PLOT.l-PLOT.r)*(G.x1-G.x0); }
+  function clampView(a,b){
+    var span = b-a, full = G.xmax-G.xmin;
+    if(span > full){ a = G.xmin; b = G.xmax; }
+    else { if(a < G.xmin){ b += G.xmin-a; a = G.xmin; } if(b > G.xmax){ a -= b-G.xmax; b = G.xmax; } }
+    G.x0 = a; G.x1 = b;
+  }
+  cv.addEventListener('pointerdown', function(e){
+    if(!G.cur || !inPlot(px(e))) return;
+    cv.setPointerCapture(e.pointerId);
+    G.drag = e.shiftKey ? {mode:'pan', a:px(e), x0:G.x0, x1:G.x1} : {mode:'zoom', a:px(e), b:px(e)};
+  });
+  cv.addEventListener('pointermove', function(e){
+    var x = px(e);
+    if(G.drag){
+      if(G.drag.mode === 'zoom') G.drag.b = x;
+      else {
+        var span = G.drag.x1 - G.drag.x0, dx = (x - G.drag.a)/(cv.clientWidth-PLOT.l-PLOT.r)*span;
+        clampView(G.drag.x0 - dx, G.drag.x1 - dx);
+      }
+    } else { G.hover = inPlot(x) ? x : null; }
+    if(G.cur) draw();
+  });
+  function end(e){
+    if(!G.drag) return;
+    var d = G.drag; G.drag = null;
+    if(d.mode === 'zoom' && Math.abs(d.b - d.a) > 6){
+      var a = toX(Math.min(d.a,d.b)), b = toX(Math.max(d.a,d.b));
+      if(b - a > 0.0005) clampView(a, b);
+    }
+    draw();
+  }
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('pointerleave', function(){ if(!G.drag){ G.hover = null; if(G.cur) draw(); } });
+  cv.addEventListener('dblclick', function(){ G.x0 = G.xmin; G.x1 = G.xmax; draw(); });
+  cv.addEventListener('wheel', function(e){
+    if(!G.cur) return;
+    var x = px(e); if(!inPlot(x)) return;
+    e.preventDefault();
+    var f = e.deltaY < 0 ? 0.8 : 1.25, c = toX(x);
+    clampView(c - (c-G.x0)*f, c + (G.x1-c)*f);
+    draw();
+  }, {passive:false});
+  $('gReset').onclick = function(){ G.x0 = G.xmin; G.x1 = G.xmax; drawIfVisible(); };
+  $('gSensor').onchange = function(){ fillList('gSensor','gValue'); pickSeries(); };
+  $('gValue').onchange = pickSeries;
+  $('gSensor2').onchange = function(){ fillList('gSensor2','gValue2'); pickSeries(); };
+  $('gValue2').onchange = pickSeries;
+  $('gSess').onchange = function(e){ G.sess = +e.target.value; pickSeries(); };
+  window.addEventListener('resize', drawIfVisible);
+  try { new MutationObserver(drawIfVisible).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']}); } catch(e){}
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawIfVisible); } catch(e){}
+})();
+
+/* tabs */
+function showTab(name){
+  var isGraph = name === 'graph';
+  $('tableView').hidden = isGraph; $('graphView').hidden = !isGraph;
+  $('tabTable').setAttribute('aria-selected', String(!isGraph)); $('tabGraph').setAttribute('aria-selected', String(isGraph));
+  if(isGraph && S.data) draw();
+}
+$('tabTable').onclick = function(){ showTab('table'); };
+$('tabGraph').onclick = function(){ showTab('graph'); };
+
+/* Start in a working state with the generated example. */
+load(demoBuffer(), 'demo.tlm (example data)', true);
+</script>
+
+</body>
+</html>
